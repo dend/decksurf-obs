@@ -1,0 +1,24 @@
+# Changelog
+
+All notable changes to the DeckSurf OBS Connector are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-30
+
+### Added
+
+- `SwitchScene` command: one key per scene, switching OBS to that scene on press.
+- `CycleScenes` command: steps through the scene list with a key press or a Stream Deck+ knob rotation.
+- Live scene previews on keys, refreshed on a configurable interval, with a red border and LIVE badge on the program scene.
+- Scene picker in the DeckSurf profile editor, populated from the running OBS instance.
+- Connection status reporting in the profile editor, including the failure reason when OBS is unreachable.
+- Masked password input for the obs-websocket password.
+- Automatic reconnection with backoff, and a shared connection for all keys pointing at the same OBS instance.
+- Release workflow that builds, versions, and publishes the plugin from a version tag.
+
+[Unreleased]: https://github.com/dend/decksurf-obs/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/dend/decksurf-obs/releases/tag/0.1.0

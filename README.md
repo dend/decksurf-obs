@@ -5,6 +5,7 @@
   <a href="https://obsproject.com/"><img src="https://img.shields.io/badge/OBS%20Studio-28%2B-302E31?logo=obsstudio&logoColor=white" alt="OBS Studio 28+" /></a>
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white" alt=".NET 10.0" />
   <a href="https://github.com/dend/decksurf-obs/commits/main"><img src="https://img.shields.io/github/last-commit/dend/decksurf-obs" alt="Last commit" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-E05735" alt="Keep a Changelog" /></a>
 </p>
 
 Control [OBS Studio](https://obsproject.com/) from your Stream Deck with [DeckSurf](https://github.com/dend/decksurf). Scene buttons show a live preview of their scene, and the scene that is on program is marked with a red border and a LIVE badge.
