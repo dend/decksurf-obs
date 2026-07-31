@@ -14,7 +14,7 @@ Control [OBS Studio](https://obsproject.com/) from your Stream Deck with [DeckSu
 
 - **Switch scene**: one button per scene. The key shows a live snapshot of the scene, and pressing it puts that scene on program.
 - **Cycle scenes**: step through your scenes with a button press, or by rotating a knob on the Stream Deck+. The key always shows what is currently live.
-- **Toggle recording**: start or stop recording with a button press. The key turns red with a REC badge while a recording is in progress, even when the recording was started from OBS itself.
+- **Toggle recording**: start or stop recording with a button press. The key shows a REC circle that slowly pulses red while a recording is in progress — even when the recording was started from OBS itself — and is greyed out when idle.
 
 When you set up a button in the DeckSurf editor, the scene picker is filled with the scenes from your running OBS, the password field is masked, and a status bar tells you whether DeckSurf can reach OBS before you ever press a key.
 

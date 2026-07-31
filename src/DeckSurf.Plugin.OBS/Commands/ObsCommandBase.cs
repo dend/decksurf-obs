@@ -141,6 +141,8 @@ namespace DeckSurf.Plugin.OBS.Commands
 
         public void Dispose()
         {
+            OnDisposing();
+
             List<ObsWebSocketClient> acquired;
 
             lock (_sync)
@@ -168,6 +170,26 @@ namespace DeckSurf.Plugin.OBS.Commands
         /// button should look like based on the client's current state.
         /// </summary>
         protected abstract void RenderBinding(ButtonBinding binding);
+
+        /// <summary>
+        /// Called at the start of <see cref="Dispose"/> so derived commands can
+        /// tear down their own resources, such as animation timers.
+        /// </summary>
+        protected virtual void OnDisposing()
+        {
+        }
+
+        /// <summary>
+        /// Returns a snapshot of the currently registered bindings, for derived
+        /// commands that re-render keys on their own schedule.
+        /// </summary>
+        protected List<ButtonBinding> SnapshotBindings()
+        {
+            lock (_sync)
+            {
+                return _bindings.Values.ToList();
+            }
+        }
 
         /// <summary>
         /// Returns the binding registered for a mapping, activating it on the fly

@@ -34,13 +34,31 @@ namespace DeckSurf.Plugin.OBS.Rendering
         // Matches the red OBS uses for the program scene.
         private static readonly Color LiveRed = Color.FromArgb(198, 32, 46);
 
-        public static byte[] Render(int buttonResolution, string text, KeyVisualState state, string badgeText = "LIVE")
+        public static byte[] Render(int buttonResolution, string text, KeyVisualState state)
         {
             var size = Math.Max(buttonResolution, 72);
 
             if (OperatingSystem.IsWindows())
             {
-                return RenderWindows(size, text, state, badgeText);
+                return RenderWindows(size, text, state);
+            }
+
+            return RenderFallback(size, state);
+        }
+
+        /// <summary>
+        /// Renders the recording key: a REC circle that is red with white text
+        /// while recording and greyed out otherwise. <paramref name="pulse"/> is
+        /// the animation position in [0..1] (0 = dimmest, 1 = brightest) and only
+        /// applies while recording; idle and disconnected keys are static.
+        /// </summary>
+        public static byte[] RenderRecordKey(int buttonResolution, KeyVisualState state, float pulse)
+        {
+            var size = Math.Max(buttonResolution, 72);
+
+            if (OperatingSystem.IsWindows())
+            {
+                return RenderRecordWindows(size, state, Math.Clamp(pulse, 0f, 1f));
             }
 
             return RenderFallback(size, state);
@@ -138,7 +156,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
         }
 
         [SupportedOSPlatform("windows")]
-        private static byte[] RenderWindows(int size, string text, KeyVisualState state, string badgeText)
+        private static byte[] RenderWindows(int size, string text, KeyVisualState state)
         {
             using var bitmap = new Bitmap(size, size);
             using var graphics = Graphics.FromImage(bitmap);
@@ -147,7 +165,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
 
             if (state == KeyVisualState.Active)
             {
-                RenderLiveKey(graphics, size, text, badgeText);
+                RenderLiveKey(graphics, size, text);
             }
             else
             {
@@ -160,7 +178,61 @@ namespace DeckSurf.Plugin.OBS.Rendering
         }
 
         [SupportedOSPlatform("windows")]
-        private static void RenderLiveKey(Graphics graphics, int size, string text, string badgeText)
+        private static byte[] RenderRecordWindows(int size, KeyVisualState state, float pulse)
+        {
+            using var bitmap = new Bitmap(size, size);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+            graphics.Clear(Color.FromArgb(30, 30, 36));
+
+            var recording = state == KeyVisualState.Active;
+            var diameter = size * 0.62f;
+            var circleRect = new RectangleF((size - diameter) / 2, (size - diameter) / 2, diameter, diameter);
+
+            if (recording)
+            {
+                // Soft halo that breathes with the pulse so the animation reads
+                // even from the corner of the eye.
+                var haloGrowth = size * 0.14f * pulse;
+                var haloRect = RectangleF.Inflate(circleRect, haloGrowth / 2, haloGrowth / 2);
+                using var halo = new SolidBrush(Color.FromArgb((int)(30 + (70 * pulse)), LiveRed));
+                graphics.FillEllipse(halo, haloRect);
+            }
+
+            using var circleBrush = new SolidBrush(recording ? LiveRed : Color.FromArgb(56, 56, 64));
+            graphics.FillEllipse(circleBrush, circleRect);
+
+            var textColor = recording
+                ? Color.FromArgb((int)(120 + (135 * pulse)), Color.White)
+                : Color.FromArgb(146, 146, 154);
+
+            using var format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            };
+
+            using var font = new Font("Segoe UI", diameter * 0.28f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var textBrush = new SolidBrush(textColor);
+            graphics.DrawString("REC", font, textBrush, circleRect, format);
+
+            if (state == KeyVisualState.Disconnected)
+            {
+                var dotSize = size * 0.14f;
+                var margin = size * 0.08f;
+                using var dot = new SolidBrush(Color.FromArgb(220, 68, 68));
+                graphics.FillEllipse(dot, size - margin - dotSize, margin, dotSize, dotSize);
+            }
+
+            using var stream = new MemoryStream();
+            bitmap.Save(stream, ImageFormat.Png);
+            return stream.ToArray();
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static void RenderLiveKey(Graphics graphics, int size, string text)
         {
             graphics.Clear(LiveRed);
 
@@ -181,7 +253,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
 
             using var badgeFont = new Font("Segoe UI", pillHeight * 0.62f, FontStyle.Bold, GraphicsUnit.Pixel);
             using var badgeBrush = new SolidBrush(LiveRed);
-            graphics.DrawString(badgeText, badgeFont, badgeBrush, pillRect, centered);
+            graphics.DrawString("LIVE", badgeFont, badgeBrush, pillRect, centered);
 
             var padding = size * 0.08f;
             var textTop = pillRect.Bottom + (size * 0.04f);

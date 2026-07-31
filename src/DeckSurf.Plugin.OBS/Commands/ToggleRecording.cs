@@ -14,11 +14,39 @@ namespace DeckSurf.Plugin.OBS.Commands
     [CommandParameter("password", CommandParameterType.Secret, DisplayName = "OBS password", Description = "obs-websocket password. Leave empty when authentication is disabled.", Order = 2)]
     public class ToggleRecording : ObsCommandBase
     {
+        // A full dim-bright-dim cycle takes PulsePeriodMs; frames tick an order
+        // of magnitude faster so the sine reads as a smooth breathing motion.
+        private const int PulsePeriodMs = 2400;
+        private const int PulseFrameMs = 120;
+
+        private readonly object _pulseSync = new();
+        private System.Timers.Timer _pulseTimer;
+
         public override string Name => "Toggle recording";
 
-        public override string Description => "Starts or stops recording in OBS Studio. The key turns red with a REC badge while a recording is in progress.";
+        public override string Description => "Starts or stops recording in OBS Studio. The key shows a REC circle that is greyed out when idle and pulses red while a recording is in progress.";
 
         protected override bool SupportsPreview => false;
+
+        public override void ExecuteOnActivation(CommandMapping mappedCommand, IConnectedDevice mappedDevice)
+        {
+            base.ExecuteOnActivation(mappedCommand, mappedDevice);
+
+            if (mappedCommand == null || mappedDevice == null)
+            {
+                return;
+            }
+
+            lock (_pulseSync)
+            {
+                if (_pulseTimer == null)
+                {
+                    _pulseTimer = new System.Timers.Timer(PulseFrameMs);
+                    _pulseTimer.Elapsed += (s, e) => RenderPulseFrames();
+                    _pulseTimer.Start();
+                }
+            }
+        }
 
         public override void ExecuteOnAction(CommandMapping mappedCommand, IConnectedDevice mappedDevice, int activatingButton = -1)
         {
@@ -45,19 +73,44 @@ namespace DeckSurf.Plugin.OBS.Commands
 
         protected override void RenderBinding(ButtonBinding binding)
         {
-            var state = !binding.Client.IsConnected
+            var client = binding.Client;
+
+            var state = !client.IsConnected
                 ? KeyVisualState.Disconnected
-                : binding.Client.IsRecording
+                : client.IsRecording
                     ? KeyVisualState.Active
                     : KeyVisualState.Inactive;
 
-            var image = KeyImageRenderer.Render(
-                binding.Device.ButtonResolution,
-                state == KeyVisualState.Active ? "Recording" : "Record",
-                state,
-                badgeText: "REC");
+            // The phase is derived from the shared clock so every recording key
+            // on the deck breathes in sync.
+            var phase = Environment.TickCount64 % PulsePeriodMs / (double)PulsePeriodMs;
+            var pulse = (float)((1 - Math.Cos(2 * Math.PI * phase)) / 2);
 
+            var image = KeyImageRenderer.RenderRecordKey(binding.Device.ButtonResolution, state, pulse);
             binding.Device.SetKey(binding.Mapping.ButtonIndex, image);
+        }
+
+        protected override void OnDisposing()
+        {
+            lock (_pulseSync)
+            {
+                _pulseTimer?.Stop();
+                _pulseTimer?.Dispose();
+                _pulseTimer = null;
+            }
+        }
+
+        private void RenderPulseFrames()
+        {
+            // Idle and disconnected keys are static and re-render through state
+            // events; only actively recording keys need animation frames.
+            foreach (var binding in SnapshotBindings())
+            {
+                if (binding.Client.IsConnected && binding.Client.IsRecording)
+                {
+                    TryRender(binding);
+                }
+            }
         }
     }
 }
