@@ -5,7 +5,7 @@
     <OutputType>Library</OutputType>
     <!-- Single source of the plugin version. Release builds from a tag override
          this with -p:Version so the tag, assembly, and plugin metadata match. -->
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

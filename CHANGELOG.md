@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-30
+
+### Added
+
+- `ToggleRecording` command: starts or stops recording in OBS with a key press. The key turns red with a REC badge while a recording is in progress, tracking recordings started from OBS itself as well.
+
 ## [0.1.0] - 2026-07-30
 
 ### Added
@@ -20,5 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic reconnection with backoff, and a shared connection for all keys pointing at the same OBS instance.
 - Release workflow that builds, versions, and publishes the plugin from a version tag.
 
-[Unreleased]: https://github.com/dend/decksurf-obs/compare/0.1.0...HEAD
+[Unreleased]: https://github.com/dend/decksurf-obs/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/dend/decksurf-obs/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/dend/decksurf-obs/releases/tag/0.1.0

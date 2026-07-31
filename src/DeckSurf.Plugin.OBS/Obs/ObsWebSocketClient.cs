@@ -27,6 +27,9 @@ namespace DeckSurf.Plugin.OBS.Obs
         // EventSubscription::Scenes: scene list and program scene change events.
         private const int EventSubscriptionScenes = 1 << 2;
 
+        // EventSubscription::Outputs: record/stream output state change events.
+        private const int EventSubscriptionOutputs = 1 << 6;
+
         private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan InitialReconnectDelay = TimeSpan.FromSeconds(1);
         private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromSeconds(30);
@@ -55,11 +58,15 @@ namespace DeckSurf.Plugin.OBS.Obs
 
         public event EventHandler<IReadOnlyList<string>> SceneListChanged;
 
+        public event EventHandler<bool> RecordStateChanged;
+
         public ObsConnectionSettings Settings => _settings;
 
         public bool IsConnected => _identified;
 
         public string CurrentProgramScene { get; private set; }
+
+        public bool IsRecording { get; private set; }
 
         /// <summary>
         /// Gets the failure message of the most recent connection attempt, or null
@@ -115,6 +122,19 @@ namespace DeckSurf.Plugin.OBS.Obs
                 "SetCurrentProgramScene",
                 new JsonObject { ["sceneName"] = sceneName },
                 cancellationToken);
+        }
+
+        /// <summary>
+        /// Starts recording when stopped and stops it when running. Returns the
+        /// new state. ToggleRecord is used instead of StartRecord/StopRecord so a
+        /// button press can never race the tracked state into an error response.
+        /// </summary>
+        public async Task<bool> ToggleRecordAsync(CancellationToken cancellationToken = default)
+        {
+            var response = await SendRequestAsync("ToggleRecord", null, cancellationToken).ConfigureAwait(false);
+            var isRecording = response?["outputActive"]?.GetValue<bool>() ?? !IsRecording;
+            UpdateRecordingState(isRecording);
+            return isRecording;
         }
 
         /// <summary>
@@ -328,7 +348,7 @@ namespace DeckSurf.Plugin.OBS.Obs
             var identifyData = new JsonObject
             {
                 ["rpcVersion"] = RpcVersion,
-                ["eventSubscriptions"] = EventSubscriptionScenes
+                ["eventSubscriptions"] = EventSubscriptionScenes | EventSubscriptionOutputs
             };
 
             if ((hello["d"] as JsonObject)?["authentication"] is JsonObject authChallenge)
@@ -354,9 +374,15 @@ namespace DeckSurf.Plugin.OBS.Obs
             LastError = null;
             ConnectionEstablished?.Invoke(this, EventArgs.Empty);
 
-            // The scene snapshot needs the receive loop below to pump the
-            // response, so it runs as a concurrent task rather than inline.
-            _ = Task.Run(() => TryRefreshSceneStateAsync(cancellationToken), cancellationToken);
+            // The state snapshots need the receive loop below to pump the
+            // responses, so they run as a concurrent task rather than inline.
+            _ = Task.Run(
+                async () =>
+                {
+                    await TryRefreshSceneStateAsync(cancellationToken).ConfigureAwait(false);
+                    await TryRefreshRecordStateAsync(cancellationToken).ConfigureAwait(false);
+                },
+                cancellationToken);
 
             await ReceiveLoopAsync(socket, cancellationToken).ConfigureAwait(false);
         }
@@ -413,6 +439,12 @@ namespace DeckSurf.Plugin.OBS.Obs
                     }
 
                     break;
+
+                case "RecordStateChanged":
+                    // outputActive is true only once the output is fully started,
+                    // so the STARTING/STOPPING transitions render as not recording.
+                    UpdateRecordingState(eventData?["outputActive"]?.GetValue<bool>() ?? false);
+                    break;
             }
         }
 
@@ -428,6 +460,30 @@ namespace DeckSurf.Plugin.OBS.Obs
             {
                 Debug.WriteLine($"Could not fetch the OBS scene list: {ex.Message}");
             }
+        }
+
+        private async Task TryRefreshRecordStateAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                var response = await SendRequestAsync("GetRecordStatus", null, cancellationToken).ConfigureAwait(false);
+                UpdateRecordingState(response?["outputActive"]?.GetValue<bool>() ?? false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Debug.WriteLine($"Could not fetch the OBS record status: {ex.Message}");
+            }
+        }
+
+        private void UpdateRecordingState(bool isRecording)
+        {
+            if (isRecording == IsRecording)
+            {
+                return;
+            }
+
+            IsRecording = isRecording;
+            RecordStateChanged?.Invoke(this, isRecording);
         }
 
         private void UpdateCurrentScene(string sceneName)
@@ -457,6 +513,10 @@ namespace DeckSurf.Plugin.OBS.Obs
             var wasConnected = _identified;
             _identified = false;
             _socket = null;
+
+            // The recording state is unknown while disconnected; reset silently
+            // since keys re-render into their disconnected look via ConnectionLost.
+            IsRecording = false;
 
             foreach (var requestId in _pendingRequests.Keys.ToArray())
             {

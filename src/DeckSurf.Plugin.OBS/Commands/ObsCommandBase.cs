@@ -36,6 +36,13 @@ namespace DeckSurf.Plugin.OBS.Commands
 
         public abstract string Description { get; }
 
+        /// <summary>
+        /// Whether the command renders scene screenshots on its keys. Commands
+        /// without a scene to preview return false so no preview timer runs and
+        /// the preview arguments are ignored.
+        /// </summary>
+        protected virtual bool SupportsPreview => true;
+
         public virtual void ExecuteOnActivation(CommandMapping mappedCommand, IConnectedDevice mappedDevice)
         {
             if (mappedCommand == null || mappedDevice == null)
@@ -48,7 +55,7 @@ namespace DeckSurf.Plugin.OBS.Commands
                 Mapping = mappedCommand,
                 Device = mappedDevice,
                 Client = ObsConnectionManager.Acquire(ObsConnectionSettings.FromArguments(mappedCommand.CommandArguments)),
-                PreviewEnabled = mappedCommand.CommandArguments.GetBoolean("preview", true),
+                PreviewEnabled = SupportsPreview && mappedCommand.CommandArguments.GetBoolean("preview", true),
                 PreviewIntervalMs = Math.Clamp(mappedCommand.CommandArguments.GetInt32("preview_interval", 3), 1, 60) * 1000
             };
 
@@ -64,6 +71,7 @@ namespace DeckSurf.Plugin.OBS.Commands
                     client.ConnectionLost += (s, e) => RenderAllFor(client);
                     client.CurrentProgramSceneChanged += (s, e) => RenderAllFor(client);
                     client.SceneListChanged += (s, e) => RenderAllFor(client);
+                    client.RecordStateChanged += (s, e) => RenderAllFor(client);
                 }
 
                 if (binding.PreviewEnabled && _previewTimer == null)

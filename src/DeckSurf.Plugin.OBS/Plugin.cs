@@ -26,7 +26,8 @@ namespace DeckSurf.Plugin.OBS
             return new List<Type>()
             {
                 typeof(SwitchScene),
-                typeof(CycleScenes)
+                typeof(CycleScenes),
+                typeof(ToggleRecording)
             };
         }
     }

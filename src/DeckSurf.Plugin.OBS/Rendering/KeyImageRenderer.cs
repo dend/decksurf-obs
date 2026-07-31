@@ -34,13 +34,13 @@ namespace DeckSurf.Plugin.OBS.Rendering
         // Matches the red OBS uses for the program scene.
         private static readonly Color LiveRed = Color.FromArgb(198, 32, 46);
 
-        public static byte[] Render(int buttonResolution, string text, KeyVisualState state)
+        public static byte[] Render(int buttonResolution, string text, KeyVisualState state, string badgeText = "LIVE")
         {
             var size = Math.Max(buttonResolution, 72);
 
             if (OperatingSystem.IsWindows())
             {
-                return RenderWindows(size, text, state);
+                return RenderWindows(size, text, state, badgeText);
             }
 
             return RenderFallback(size, state);
@@ -138,7 +138,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
         }
 
         [SupportedOSPlatform("windows")]
-        private static byte[] RenderWindows(int size, string text, KeyVisualState state)
+        private static byte[] RenderWindows(int size, string text, KeyVisualState state, string badgeText)
         {
             using var bitmap = new Bitmap(size, size);
             using var graphics = Graphics.FromImage(bitmap);
@@ -147,7 +147,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
 
             if (state == KeyVisualState.Active)
             {
-                RenderLiveKey(graphics, size, text);
+                RenderLiveKey(graphics, size, text, badgeText);
             }
             else
             {
@@ -160,7 +160,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
         }
 
         [SupportedOSPlatform("windows")]
-        private static void RenderLiveKey(Graphics graphics, int size, string text)
+        private static void RenderLiveKey(Graphics graphics, int size, string text, string badgeText)
         {
             graphics.Clear(LiveRed);
 
@@ -181,7 +181,7 @@ namespace DeckSurf.Plugin.OBS.Rendering
 
             using var badgeFont = new Font("Segoe UI", pillHeight * 0.62f, FontStyle.Bold, GraphicsUnit.Pixel);
             using var badgeBrush = new SolidBrush(LiveRed);
-            graphics.DrawString("LIVE", badgeFont, badgeBrush, pillRect, centered);
+            graphics.DrawString(badgeText, badgeFont, badgeBrush, pillRect, centered);
 
             var padding = size * 0.08f;
             var textTop = pillRect.Bottom + (size * 0.04f);
