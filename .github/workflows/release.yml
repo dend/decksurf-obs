@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: write
@@ -23,9 +23,9 @@ jobs:
       - name: Resolve version from tag
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
+          $version = "${{ github.ref_name }}"
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Tag '${{ github.ref_name }}' does not look like v<major>.<minor>.<patch>."
+            throw "Tag '$version' does not look like <major>.<minor>.<patch>."
           }
           "PLUGIN_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
