@@ -27,7 +27,10 @@ namespace DeckSurf.Plugin.OBS
             {
                 typeof(SwitchScene),
                 typeof(CycleScenes),
-                typeof(ToggleRecording)
+                typeof(ToggleRecording),
+                typeof(PauseRecording),
+                typeof(ToggleMute),
+                typeof(ToggleVirtualCamera)
             };
         }
     }

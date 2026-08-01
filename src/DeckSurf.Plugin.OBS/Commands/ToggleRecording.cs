@@ -24,7 +24,7 @@ namespace DeckSurf.Plugin.OBS.Commands
 
         public override string Name => "Toggle recording";
 
-        public override string Description => "Starts or stops recording in OBS Studio. The key shows a REC circle that is greyed out when idle and pulses red while a recording is in progress.";
+        public override string Description => "Starts or stops recording in OBS Studio. The key shows a REC circle that is greyed out when idle, pulses red while a recording is in progress, and turns amber while the recording is paused.";
 
         protected override bool SupportsPreview => false;
 
@@ -86,7 +86,11 @@ namespace DeckSurf.Plugin.OBS.Commands
             var phase = Environment.TickCount64 % PulsePeriodMs / (double)PulsePeriodMs;
             var pulse = (float)((1 - Math.Cos(2 * Math.PI * phase)) / 2);
 
-            var image = KeyImageRenderer.RenderRecordKey(binding.Device.ButtonResolution, state, pulse);
+            var image = KeyImageRenderer.RenderRecordKey(
+                binding.Device.ButtonResolution,
+                state,
+                pulse,
+                client.IsConnected && client.IsRecordingPaused);
             binding.Device.SetKey(binding.Mapping.ButtonIndex, image);
         }
 
@@ -102,11 +106,12 @@ namespace DeckSurf.Plugin.OBS.Commands
 
         private void RenderPulseFrames()
         {
-            // Idle and disconnected keys are static and re-render through state
-            // events; only actively recording keys need animation frames.
+            // Idle, paused, and disconnected keys are static and re-render
+            // through state events; only actively recording keys need animation
+            // frames.
             foreach (var binding in SnapshotBindings())
             {
-                if (binding.Client.IsConnected && binding.Client.IsRecording)
+                if (binding.Client.IsConnected && binding.Client.IsRecording && !binding.Client.IsRecordingPaused)
                 {
                     TryRender(binding);
                 }

@@ -72,6 +72,8 @@ namespace DeckSurf.Plugin.OBS.Commands
                     client.CurrentProgramSceneChanged += (s, e) => RenderAllFor(client);
                     client.SceneListChanged += (s, e) => RenderAllFor(client);
                     client.RecordStateChanged += (s, e) => RenderAllFor(client);
+                    client.VirtualCamStateChanged += (s, e) => RenderAllFor(client);
+                    client.InputMuteStateChanged += (s, e) => RenderAllFor(client);
                 }
 
                 if (binding.PreviewEnabled && _previewTimer == null)
