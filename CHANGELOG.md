@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
 ### Added
 
 - `ToggleMute` command: mutes or unmutes an OBS audio input with a key press. The input picker in the profile editor is populated from the running OBS instance, and the key shows a red slashed microphone while the input is muted, tracking mute changes made in OBS itself as well.
@@ -46,7 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic reconnection with backoff, and a shared connection for all keys pointing at the same OBS instance.
 - Release workflow that builds, versions, and publishes the plugin from a version tag.
 
-[Unreleased]: https://github.com/dend/decksurf-obs/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/dend/decksurf-obs/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/dend/decksurf-obs/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/dend/decksurf-obs/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/dend/decksurf-obs/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/dend/decksurf-obs/releases/tag/0.1.0
