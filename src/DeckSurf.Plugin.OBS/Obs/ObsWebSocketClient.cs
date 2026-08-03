@@ -27,18 +27,30 @@ namespace DeckSurf.Plugin.OBS.Obs
         // EventSubscription::Scenes: scene list and program scene change events.
         private const int EventSubscriptionScenes = 1 << 2;
 
-        // EventSubscription::Outputs: record/stream output state change events.
+        // EventSubscription::Inputs: input mute and rename events.
+        private const int EventSubscriptionInputs = 1 << 3;
+
+        // EventSubscription::Outputs: record/stream/virtual camera output state
+        // change events.
         private const int EventSubscriptionOutputs = 1 << 6;
 
         private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+        // A failed connect to a down OBS is a cheap, immediate TCP refusal, so
+        // the retry cap stays short; a long cap only delays recovery after OBS
+        // comes back up.
         private static readonly TimeSpan InitialReconnectDelay = TimeSpan.FromSeconds(1);
-        private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromSeconds(5);
 
         private readonly ObsConnectionSettings _settings;
         private readonly CancellationTokenSource _lifetime = new();
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> _pendingRequests = new();
         private readonly object _stateLock = new();
+
+        // Inputs whose mute state the commands care about. Tracked names survive
+        // reconnects; the states themselves are re-fetched on every connect.
+        private readonly ConcurrentDictionary<string, byte> _trackedInputs = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, bool> _inputMuteStates = new(StringComparer.Ordinal);
 
         private ClientWebSocket _socket;
         private Task _connectionLoop;
@@ -60,6 +72,14 @@ namespace DeckSurf.Plugin.OBS.Obs
 
         public event EventHandler<bool> RecordStateChanged;
 
+        public event EventHandler<bool> VirtualCamStateChanged;
+
+        /// <summary>
+        /// Raised with the input name when a tracked input's mute state changes
+        /// or becomes unknown (for example after the input is renamed in OBS).
+        /// </summary>
+        public event EventHandler<string> InputMuteStateChanged;
+
         public ObsConnectionSettings Settings => _settings;
 
         public bool IsConnected => _identified;
@@ -67,6 +87,10 @@ namespace DeckSurf.Plugin.OBS.Obs
         public string CurrentProgramScene { get; private set; }
 
         public bool IsRecording { get; private set; }
+
+        public bool IsRecordingPaused { get; private set; }
+
+        public bool IsVirtualCamActive { get; private set; }
 
         /// <summary>
         /// Gets the failure message of the most recent connection attempt, or null
@@ -133,8 +157,141 @@ namespace DeckSurf.Plugin.OBS.Obs
         {
             var response = await SendRequestAsync("ToggleRecord", null, cancellationToken).ConfigureAwait(false);
             var isRecording = response?["outputActive"]?.GetValue<bool>() ?? !IsRecording;
-            UpdateRecordingState(isRecording);
+
+            // Stopping clears any pause; starting begins unpaused.
+            UpdateRecordingState(isRecording, isPaused: false);
             return isRecording;
+        }
+
+        /// <summary>
+        /// Pauses the recording when running and resumes it when paused. Returns
+        /// the new paused state. Depending on the obs-websocket version, a call
+        /// with no recording active either raises an
+        /// <see cref="ObsRequestException"/> or succeeds as a no-op.
+        /// </summary>
+        public async Task<bool> ToggleRecordPauseAsync(CancellationToken cancellationToken = default)
+        {
+            var response = await SendRequestAsync("ToggleRecordPause", null, cancellationToken).ConfigureAwait(false);
+            var isPaused = response?["outputPaused"]?.GetValue<bool>() ?? !IsRecordingPaused;
+            UpdateRecordingState(IsRecording, isPaused);
+            return isPaused;
+        }
+
+        /// <summary>
+        /// Starts the virtual camera when stopped and stops it when running.
+        /// Returns the new state.
+        /// </summary>
+        public async Task<bool> ToggleVirtualCamAsync(CancellationToken cancellationToken = default)
+        {
+            var response = await SendRequestAsync("ToggleVirtualCam", null, cancellationToken).ConfigureAwait(false);
+            var isActive = response?["outputActive"]?.GetValue<bool>() ?? !IsVirtualCamActive;
+            UpdateVirtualCamState(isActive);
+            return isActive;
+        }
+
+        /// <summary>
+        /// Registers an input whose mute state should be tracked across the
+        /// connection's lifetime. The state is fetched immediately when connected
+        /// and re-fetched after every reconnect.
+        /// </summary>
+        public void TrackInputMute(string inputName)
+        {
+            if (string.IsNullOrEmpty(inputName))
+            {
+                return;
+            }
+
+            _trackedInputs[inputName] = 0;
+
+            if (IsConnected)
+            {
+                _ = TryRefreshInputMuteAsync(inputName, _lifetime.Token);
+            }
+        }
+
+        /// <summary>
+        /// Returns the tracked mute state of an input, or null when it is not
+        /// known (disconnected, not yet fetched, or the input does not exist).
+        /// </summary>
+        public bool? GetInputMuteState(string inputName)
+        {
+            return inputName != null && _inputMuteStates.TryGetValue(inputName, out var muted) ? muted : null;
+        }
+
+        public async Task<bool> ToggleInputMuteAsync(string inputName, CancellationToken cancellationToken = default)
+        {
+            var response = await SendRequestAsync(
+                "ToggleInputMute",
+                new JsonObject { ["inputName"] = inputName },
+                cancellationToken).ConfigureAwait(false);
+
+            var muted = response?["inputMuted"]?.GetValue<bool>() ?? false;
+            UpdateInputMuteState(inputName, muted);
+            return muted;
+        }
+
+        /// <summary>
+        /// Waits until the client is connected or the timeout elapses. Used by
+        /// configuration tooling before one-shot queries.
+        /// </summary>
+        public async Task<bool> WaitForConnectionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+
+            while (!IsConnected && Environment.TickCount64 < deadline && !cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            }
+
+            return IsConnected;
+        }
+
+        /// <summary>
+        /// Returns the names of inputs that can be muted: the special outputs
+        /// (microphones, desktop audio) first, then every other input that
+        /// accepts a mute query. Used by configuration tooling to populate the
+        /// input picker.
+        /// </summary>
+        public async Task<IReadOnlyList<string>> GetMutableInputsAsync(CancellationToken cancellationToken = default)
+        {
+            var candidates = new List<string>();
+
+            var special = await SendRequestAsync("GetSpecialInputs", null, cancellationToken).ConfigureAwait(false);
+            foreach (var key in new[] { "mic1", "mic2", "mic3", "mic4", "desktop1", "desktop2" })
+            {
+                var name = (string)special?[key];
+                if (!string.IsNullOrEmpty(name) && !candidates.Contains(name))
+                {
+                    candidates.Add(name);
+                }
+            }
+
+            var list = await SendRequestAsync("GetInputList", null, cancellationToken).ConfigureAwait(false);
+            foreach (var input in (list?["inputs"] as JsonArray)?.OfType<JsonObject>() ?? Enumerable.Empty<JsonObject>())
+            {
+                var name = (string)input["inputName"];
+                if (!string.IsNullOrEmpty(name) && !candidates.Contains(name))
+                {
+                    candidates.Add(name);
+                }
+            }
+
+            // Only audio-capable inputs answer GetInputMute; video-only sources
+            // error out and are filtered from the picker.
+            var mutable = new List<string>();
+            foreach (var name in candidates)
+            {
+                try
+                {
+                    await SendRequestAsync("GetInputMute", new JsonObject { ["inputName"] = name }, cancellationToken).ConfigureAwait(false);
+                    mutable.Add(name);
+                }
+                catch (ObsRequestException)
+                {
+                }
+            }
+
+            return mutable;
         }
 
         /// <summary>
@@ -348,7 +505,7 @@ namespace DeckSurf.Plugin.OBS.Obs
             var identifyData = new JsonObject
             {
                 ["rpcVersion"] = RpcVersion,
-                ["eventSubscriptions"] = EventSubscriptionScenes | EventSubscriptionOutputs
+                ["eventSubscriptions"] = EventSubscriptionScenes | EventSubscriptionInputs | EventSubscriptionOutputs
             };
 
             if ((hello["d"] as JsonObject)?["authentication"] is JsonObject authChallenge)
@@ -381,6 +538,12 @@ namespace DeckSurf.Plugin.OBS.Obs
                 {
                     await TryRefreshSceneStateAsync(cancellationToken).ConfigureAwait(false);
                     await TryRefreshRecordStateAsync(cancellationToken).ConfigureAwait(false);
+                    await TryRefreshVirtualCamStateAsync(cancellationToken).ConfigureAwait(false);
+
+                    foreach (var inputName in _trackedInputs.Keys.ToArray())
+                    {
+                        await TryRefreshInputMuteAsync(inputName, cancellationToken).ConfigureAwait(false);
+                    }
                 },
                 cancellationToken);
 
@@ -441,9 +604,56 @@ namespace DeckSurf.Plugin.OBS.Obs
                     break;
 
                 case "RecordStateChanged":
+                    HandleRecordStateEvent(eventData);
+                    break;
+
+                case "VirtualcamStateChanged":
                     // outputActive is true only once the output is fully started,
-                    // so the STARTING/STOPPING transitions render as not recording.
-                    UpdateRecordingState(eventData?["outputActive"]?.GetValue<bool>() ?? false);
+                    // so the STARTING/STOPPING transitions render as stopped.
+                    UpdateVirtualCamState(eventData?["outputActive"]?.GetValue<bool>() ?? false);
+                    break;
+
+                case "InputMuteStateChanged":
+                    UpdateInputMuteState((string)eventData?["inputName"], eventData?["inputMuted"]?.GetValue<bool>() ?? false);
+                    break;
+
+                case "InputNameChanged":
+                    // The binding keeps pointing at the old name, so its state is
+                    // simply no longer known; the key re-renders into the unknown
+                    // look until the mapping is updated.
+                    var oldName = (string)eventData?["oldInputName"];
+                    if (oldName != null && _inputMuteStates.TryRemove(oldName, out _))
+                    {
+                        InputMuteStateChanged?.Invoke(this, oldName);
+                    }
+
+                    break;
+            }
+        }
+
+        private void HandleRecordStateEvent(JsonObject eventData)
+        {
+            // Pause state is derived from outputState rather than outputActive:
+            // obs-websocket reports outputActive as false in the PAUSED event even
+            // though the recording still exists. STARTING/STOPPING transitions
+            // fall through to outputActive and render as not recording.
+            switch ((string)eventData?["outputState"])
+            {
+                case "OBS_WEBSOCKET_OUTPUT_STARTED":
+                case "OBS_WEBSOCKET_OUTPUT_RESUMED":
+                    UpdateRecordingState(isRecording: true, isPaused: false);
+                    break;
+
+                case "OBS_WEBSOCKET_OUTPUT_PAUSED":
+                    UpdateRecordingState(isRecording: true, isPaused: true);
+                    break;
+
+                case "OBS_WEBSOCKET_OUTPUT_STOPPED":
+                    UpdateRecordingState(isRecording: false, isPaused: false);
+                    break;
+
+                default:
+                    UpdateRecordingState(eventData?["outputActive"]?.GetValue<bool>() ?? false, isPaused: false);
                     break;
             }
         }
@@ -467,7 +677,11 @@ namespace DeckSurf.Plugin.OBS.Obs
             try
             {
                 var response = await SendRequestAsync("GetRecordStatus", null, cancellationToken).ConfigureAwait(false);
-                UpdateRecordingState(response?["outputActive"]?.GetValue<bool>() ?? false);
+
+                // Early obs-websocket 5.0 builds shipped the paused flag with a
+                // typo ("ouputPaused"); read both so those versions still work.
+                var isPaused = (response?["outputPaused"] ?? response?["ouputPaused"])?.GetValue<bool>() ?? false;
+                UpdateRecordingState(response?["outputActive"]?.GetValue<bool>() ?? false, isPaused);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -475,15 +689,79 @@ namespace DeckSurf.Plugin.OBS.Obs
             }
         }
 
-        private void UpdateRecordingState(bool isRecording)
+        private async Task TryRefreshVirtualCamStateAsync(CancellationToken cancellationToken)
         {
-            if (isRecording == IsRecording)
+            try
+            {
+                var response = await SendRequestAsync("GetVirtualCamStatus", null, cancellationToken).ConfigureAwait(false);
+                UpdateVirtualCamState(response?["outputActive"]?.GetValue<bool>() ?? false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Debug.WriteLine($"Could not fetch the OBS virtual camera status: {ex.Message}");
+            }
+        }
+
+        private async Task TryRefreshInputMuteAsync(string inputName, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var response = await SendRequestAsync(
+                    "GetInputMute",
+                    new JsonObject { ["inputName"] = inputName },
+                    cancellationToken).ConfigureAwait(false);
+
+                UpdateInputMuteState(inputName, response?["inputMuted"]?.GetValue<bool>() ?? false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Debug.WriteLine($"Could not fetch the OBS mute state of '{inputName}': {ex.Message}");
+            }
+        }
+
+        private void UpdateRecordingState(bool isRecording, bool isPaused)
+        {
+            // A pause can only exist within a recording. Guards the optimistic
+            // update in ToggleRecordPauseAsync: newer obs-websocket versions
+            // accept ToggleRecordPause with no recording running instead of
+            // erroring, which must not wedge the state into paused-while-idle.
+            isPaused &= isRecording;
+
+            if (isRecording == IsRecording && isPaused == IsRecordingPaused)
             {
                 return;
             }
 
             IsRecording = isRecording;
+            IsRecordingPaused = isPaused;
             RecordStateChanged?.Invoke(this, isRecording);
+        }
+
+        private void UpdateVirtualCamState(bool isActive)
+        {
+            if (isActive == IsVirtualCamActive)
+            {
+                return;
+            }
+
+            IsVirtualCamActive = isActive;
+            VirtualCamStateChanged?.Invoke(this, isActive);
+        }
+
+        private void UpdateInputMuteState(string inputName, bool muted)
+        {
+            if (string.IsNullOrEmpty(inputName))
+            {
+                return;
+            }
+
+            if (_inputMuteStates.TryGetValue(inputName, out var existing) && existing == muted)
+            {
+                return;
+            }
+
+            _inputMuteStates[inputName] = muted;
+            InputMuteStateChanged?.Invoke(this, inputName);
         }
 
         private void UpdateCurrentScene(string sceneName)
@@ -514,9 +792,13 @@ namespace DeckSurf.Plugin.OBS.Obs
             _identified = false;
             _socket = null;
 
-            // The recording state is unknown while disconnected; reset silently
-            // since keys re-render into their disconnected look via ConnectionLost.
+            // Output and mute states are unknown while disconnected; reset
+            // silently since keys re-render into their disconnected look via
+            // ConnectionLost. Tracked input names are kept for the reconnect.
             IsRecording = false;
+            IsRecordingPaused = false;
+            IsVirtualCamActive = false;
+            _inputMuteStates.Clear();
 
             foreach (var requestId in _pendingRequests.Keys.ToArray())
             {

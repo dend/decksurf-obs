@@ -12,10 +12,11 @@ namespace DeckSurf.Plugin.OBS.Rendering
 {
     public enum KeyVisualState
     {
-        /// <summary>Scene is the current program scene.</summary>
+        /// <summary>The key's function is engaged: scene on program, recording
+        /// running, input muted, virtual camera on.</summary>
         Active,
 
-        /// <summary>Connected to OBS, but the scene is not live.</summary>
+        /// <summary>Connected to OBS, but the key's function is not engaged.</summary>
         Inactive,
 
         /// <summary>No connection to OBS.</summary>
@@ -34,6 +35,12 @@ namespace DeckSurf.Plugin.OBS.Rendering
         // Matches the red OBS uses for the program scene.
         private static readonly Color LiveRed = Color.FromArgb(198, 32, 46);
 
+        private static readonly Color PausedAmber = Color.FromArgb(222, 152, 32);
+        private static readonly Color VirtualCamBlue = Color.FromArgb(38, 128, 235);
+        private static readonly Color PanelBackground = Color.FromArgb(30, 30, 36);
+        private static readonly Color IdleCircle = Color.FromArgb(56, 56, 64);
+        private static readonly Color IdleForeground = Color.FromArgb(146, 146, 154);
+
         public static byte[] Render(int buttonResolution, string text, KeyVisualState state)
         {
             var size = Math.Max(buttonResolution, 72);
@@ -48,20 +55,76 @@ namespace DeckSurf.Plugin.OBS.Rendering
 
         /// <summary>
         /// Renders the recording key: a REC circle that is red with white text
-        /// while recording and greyed out otherwise. <paramref name="pulse"/> is
-        /// the animation position in [0..1] (0 = dimmest, 1 = brightest) and only
-        /// applies while recording; idle and disconnected keys are static.
+        /// while recording, amber while the recording is paused, and greyed out
+        /// otherwise. <paramref name="pulse"/> is the animation position in
+        /// [0..1] (0 = dimmest, 1 = brightest) and only applies while actively
+        /// recording; paused, idle, and disconnected keys are static.
         /// </summary>
-        public static byte[] RenderRecordKey(int buttonResolution, KeyVisualState state, float pulse)
+        public static byte[] RenderRecordKey(int buttonResolution, KeyVisualState state, float pulse, bool paused)
         {
             var size = Math.Max(buttonResolution, 72);
 
             if (OperatingSystem.IsWindows())
             {
-                return RenderRecordWindows(size, state, Math.Clamp(pulse, 0f, 1f));
+                return RenderRecordWindows(size, state, Math.Clamp(pulse, 0f, 1f), paused);
             }
 
             return RenderFallback(size, state);
+        }
+
+        /// <summary>
+        /// Renders the mute key: a microphone glyph with the input name in a band
+        /// at the bottom. <see cref="KeyVisualState.Active"/> means muted and
+        /// draws the glyph in red with a slash through it.
+        /// </summary>
+        public static byte[] RenderMuteKey(int buttonResolution, KeyVisualState state, string inputName)
+        {
+            var size = Math.Max(buttonResolution, 72);
+
+            if (OperatingSystem.IsWindows())
+            {
+                return RenderMuteWindows(size, state, inputName);
+            }
+
+            return RenderFallback(size, state);
+        }
+
+        /// <summary>
+        /// Renders the recording pause key: pause bars in a circle that turns
+        /// amber while the recording is paused. <see cref="KeyVisualState.Active"/>
+        /// means a recording is running; idle keys stay dimmed since pausing does
+        /// not apply.
+        /// </summary>
+        public static byte[] RenderPauseKey(int buttonResolution, KeyVisualState state, bool paused)
+        {
+            var size = Math.Max(buttonResolution, 72);
+
+            if (OperatingSystem.IsWindows())
+            {
+                return RenderPauseWindows(size, state, paused);
+            }
+
+            return paused
+                ? ImageHelper.CreateBlankImage(size, new DeviceColor(PausedAmber.R, PausedAmber.G, PausedAmber.B))
+                : RenderFallback(size, state);
+        }
+
+        /// <summary>
+        /// Renders the virtual camera key: a CAM circle that lights up blue while
+        /// the virtual camera is running.
+        /// </summary>
+        public static byte[] RenderVirtualCamKey(int buttonResolution, KeyVisualState state)
+        {
+            var size = Math.Max(buttonResolution, 72);
+
+            if (OperatingSystem.IsWindows())
+            {
+                return RenderVirtualCamWindows(size, state);
+            }
+
+            return state == KeyVisualState.Active
+                ? ImageHelper.CreateBlankImage(size, new DeviceColor(VirtualCamBlue.R, VirtualCamBlue.G, VirtualCamBlue.B))
+                : RenderFallback(size, state);
         }
 
         /// <summary>
@@ -178,20 +241,20 @@ namespace DeckSurf.Plugin.OBS.Rendering
         }
 
         [SupportedOSPlatform("windows")]
-        private static byte[] RenderRecordWindows(int size, KeyVisualState state, float pulse)
+        private static byte[] RenderRecordWindows(int size, KeyVisualState state, float pulse, bool paused)
         {
             using var bitmap = new Bitmap(size, size);
             using var graphics = Graphics.FromImage(bitmap);
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-            graphics.Clear(Color.FromArgb(30, 30, 36));
+            graphics.Clear(PanelBackground);
 
             var recording = state == KeyVisualState.Active;
             var diameter = size * 0.62f;
             var circleRect = new RectangleF((size - diameter) / 2, (size - diameter) / 2, diameter, diameter);
 
-            if (recording)
+            if (recording && !paused)
             {
                 // Soft halo that breathes with the pulse so the animation reads
                 // even from the corner of the eye.
@@ -201,12 +264,15 @@ namespace DeckSurf.Plugin.OBS.Rendering
                 graphics.FillEllipse(halo, haloRect);
             }
 
-            using var circleBrush = new SolidBrush(recording ? LiveRed : Color.FromArgb(56, 56, 64));
+            var circleColor = !recording ? IdleCircle : paused ? PausedAmber : LiveRed;
+            using var circleBrush = new SolidBrush(circleColor);
             graphics.FillEllipse(circleBrush, circleRect);
 
-            var textColor = recording
-                ? Color.FromArgb((int)(120 + (135 * pulse)), Color.White)
-                : Color.FromArgb(146, 146, 154);
+            var textColor = !recording
+                ? IdleForeground
+                : paused
+                    ? Color.White
+                    : Color.FromArgb((int)(120 + (135 * pulse)), Color.White);
 
             using var format = new StringFormat
             {
@@ -218,17 +284,184 @@ namespace DeckSurf.Plugin.OBS.Rendering
             using var textBrush = new SolidBrush(textColor);
             graphics.DrawString("REC", font, textBrush, circleRect, format);
 
-            if (state == KeyVisualState.Disconnected)
-            {
-                var dotSize = size * 0.14f;
-                var margin = size * 0.08f;
-                using var dot = new SolidBrush(Color.FromArgb(220, 68, 68));
-                graphics.FillEllipse(dot, size - margin - dotSize, margin, dotSize, dotSize);
-            }
+            DrawDisconnectedDot(graphics, size, state);
 
             using var stream = new MemoryStream();
             bitmap.Save(stream, ImageFormat.Png);
             return stream.ToArray();
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static byte[] RenderMuteWindows(int size, KeyVisualState state, string inputName)
+        {
+            using var bitmap = new Bitmap(size, size);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+            graphics.Clear(PanelBackground);
+
+            var muted = state == KeyVisualState.Active;
+            var glyphColor = state switch
+            {
+                KeyVisualState.Active => LiveRed,
+                KeyVisualState.Inactive => Color.FromArgb(210, 210, 215),
+                _ => IdleForeground
+            };
+
+            var glyphArea = new RectangleF(size * 0.31f, size * 0.10f, size * 0.38f, size * 0.54f);
+            DrawMicGlyph(graphics, glyphArea, glyphColor);
+
+            if (muted)
+            {
+                // The slash gets a background-colored underlay so it separates
+                // from the glyph strokes it crosses.
+                var slashStart = new PointF(glyphArea.Left - (size * 0.07f), glyphArea.Top - (size * 0.04f));
+                var slashEnd = new PointF(glyphArea.Right + (size * 0.07f), glyphArea.Bottom + (size * 0.04f));
+
+                using var underlay = new Pen(PanelBackground, size * 0.11f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+                graphics.DrawLine(underlay, slashStart, slashEnd);
+
+                using var slash = new Pen(LiveRed, size * 0.06f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+                graphics.DrawLine(slash, slashStart, slashEnd);
+            }
+
+            if (!string.IsNullOrWhiteSpace(inputName))
+            {
+                var bandHeight = size * 0.24f;
+                var bandRect = new RectangleF(0, size - bandHeight, size, bandHeight);
+                using var bandBrush = new SolidBrush(Color.FromArgb(180, 12, 12, 16));
+                graphics.FillRectangle(bandBrush, bandRect);
+
+                using var format = new StringFormat
+                {
+                    Alignment = StringAlignment.Center,
+                    LineAlignment = StringAlignment.Center,
+                    Trimming = StringTrimming.EllipsisCharacter,
+                    FormatFlags = StringFormatFlags.NoWrap
+                };
+
+                using var nameFont = new Font("Segoe UI", bandHeight * 0.42f, FontStyle.Bold, GraphicsUnit.Pixel);
+                using var nameBrush = new SolidBrush(state == KeyVisualState.Disconnected ? IdleForeground : Color.White);
+                graphics.DrawString(inputName, nameFont, nameBrush, bandRect, format);
+            }
+
+            DrawDisconnectedDot(graphics, size, state);
+
+            using var stream = new MemoryStream();
+            bitmap.Save(stream, ImageFormat.Png);
+            return stream.ToArray();
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static byte[] RenderPauseWindows(int size, KeyVisualState state, bool paused)
+        {
+            using var bitmap = new Bitmap(size, size);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            graphics.Clear(PanelBackground);
+
+            var recording = state == KeyVisualState.Active;
+            var diameter = size * 0.62f;
+            var circleRect = new RectangleF((size - diameter) / 2, (size - diameter) / 2, diameter, diameter);
+
+            using var circleBrush = new SolidBrush(paused ? PausedAmber : IdleCircle);
+            graphics.FillEllipse(circleBrush, circleRect);
+
+            // White bars while pausing applies (recording or already paused);
+            // dimmed otherwise so the key reads as not currently actionable.
+            var barColor = paused || recording ? Color.White : IdleForeground;
+            var barWidth = diameter * 0.13f;
+            var barHeight = diameter * 0.38f;
+            var barGap = diameter * 0.14f;
+            var barTop = circleRect.Top + ((diameter - barHeight) / 2);
+            var centerX = circleRect.Left + (diameter / 2);
+
+            using var barBrush = new SolidBrush(barColor);
+            using var leftBar = RoundedRect(new RectangleF(centerX - (barGap / 2) - barWidth, barTop, barWidth, barHeight), barWidth * 0.3f);
+            using var rightBar = RoundedRect(new RectangleF(centerX + (barGap / 2), barTop, barWidth, barHeight), barWidth * 0.3f);
+            graphics.FillPath(barBrush, leftBar);
+            graphics.FillPath(barBrush, rightBar);
+
+            DrawDisconnectedDot(graphics, size, state);
+
+            using var stream = new MemoryStream();
+            bitmap.Save(stream, ImageFormat.Png);
+            return stream.ToArray();
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static byte[] RenderVirtualCamWindows(int size, KeyVisualState state)
+        {
+            using var bitmap = new Bitmap(size, size);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+            graphics.Clear(PanelBackground);
+
+            var active = state == KeyVisualState.Active;
+            var diameter = size * 0.62f;
+            var circleRect = new RectangleF((size - diameter) / 2, (size - diameter) / 2, diameter, diameter);
+
+            using var circleBrush = new SolidBrush(active ? VirtualCamBlue : IdleCircle);
+            graphics.FillEllipse(circleBrush, circleRect);
+
+            using var format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            };
+
+            using var font = new Font("Segoe UI", diameter * 0.28f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var textBrush = new SolidBrush(active ? Color.White : IdleForeground);
+            graphics.DrawString("CAM", font, textBrush, circleRect, format);
+
+            DrawDisconnectedDot(graphics, size, state);
+
+            using var stream = new MemoryStream();
+            bitmap.Save(stream, ImageFormat.Png);
+            return stream.ToArray();
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static void DrawMicGlyph(Graphics graphics, RectangleF area, Color color)
+        {
+            var capsuleWidth = area.Width * 0.52f;
+            var capsuleHeight = area.Height * 0.58f;
+            var capsuleRect = new RectangleF(area.Left + ((area.Width - capsuleWidth) / 2), area.Top, capsuleWidth, capsuleHeight);
+
+            using var capsule = RoundedRect(capsuleRect, capsuleWidth / 2);
+            using var brush = new SolidBrush(color);
+            graphics.FillPath(brush, capsule);
+
+            var penWidth = Math.Max(2f, area.Width * 0.14f);
+            using var pen = new Pen(color, penWidth) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+
+            // Cradle: the lower half of an ellipse wrapped around the capsule,
+            // then the stem and base plate below it.
+            var cradleRect = new RectangleF(area.Left, capsuleRect.Top + (capsuleHeight * 0.4f), area.Width, capsuleHeight * 0.85f);
+            graphics.DrawArc(pen, cradleRect, 0, 180);
+
+            var centerX = area.Left + (area.Width / 2);
+            var baseY = area.Bottom - (penWidth / 2);
+            graphics.DrawLine(pen, centerX, cradleRect.Bottom, centerX, baseY);
+            graphics.DrawLine(pen, centerX - (area.Width * 0.28f), baseY, centerX + (area.Width * 0.28f), baseY);
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static void DrawDisconnectedDot(Graphics graphics, int size, KeyVisualState state)
+        {
+            if (state != KeyVisualState.Disconnected)
+            {
+                return;
+            }
+
+            var dotSize = size * 0.14f;
+            var margin = size * 0.08f;
+            using var dot = new SolidBrush(Color.FromArgb(220, 68, 68));
+            graphics.FillEllipse(dot, size - margin - dotSize, margin, dotSize, dotSize);
         }
 
         [SupportedOSPlatform("windows")]

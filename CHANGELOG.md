@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ToggleMute` command: mutes or unmutes an OBS audio input with a key press. The input picker in the profile editor is populated from the running OBS instance, and the key shows a red slashed microphone while the input is muted, tracking mute changes made in OBS itself as well.
+- `PauseRecording` command: pauses or resumes the current recording with a key press. The key shows pause bars that turn amber while the recording is paused and stays dimmed when no recording is running.
+- `ToggleVirtualCamera` command: starts or stops the OBS virtual camera with a key press. The key lights up blue while the virtual camera is running.
+
+### Changed
+
+- The recording key now turns amber while the recording is paused instead of continuing to pulse red.
+
+### Fixed
+
+- Keys recover within seconds after OBS is restarted. The reconnect backoff previously climbed to 30 seconds while OBS was down, so a relaunched OBS could sit unnoticed for up to half a minute before the keys reactivated; the backoff is now capped at 5 seconds.
+
 ## [0.3.0] - 2026-07-31
 
 ### Changed
